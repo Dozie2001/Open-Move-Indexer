@@ -1,0 +1,15 @@
+[package]
+name = "webhook-indexer"
+version = "0.1.0"
+edition = "2025"
+
+[dependencies]
+async-trait = "0.1.83"
+tokio = { version = "1.38.0", features = ["full"]}
+sui_types = { git = "https://github.com/mystenlabs/sui", package = "sui-types"}
+sui_data_ingestion_core = { git = "https://github.com/mystenlabs/sui", package = "sui-data-ingestion-core"}
+prometheus = "0.13.3"
+anyhow = "1.0.86"
+config = "0.14.0"
+serde = { version = "1.0.216", features = ["derive"] }
+clap = { version = "4.5.23", features = ["derive"] }
