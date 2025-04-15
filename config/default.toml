@@ -1,0 +1,10 @@
+[database]
+url = "postgres://postgres:postgres@localhost:5432/indexer"
+max_connections = 10
+
+[sui]
+endpoint = "https://checkpoints.testnet.sui.io"
+initial_checkpoint = 0
+concurrency = 5
+
+log_level = "info"
