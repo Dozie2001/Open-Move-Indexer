@@ -44,21 +44,17 @@ impl RabbitMQConnection {
         let connection = Self::establish_connection(amqp_url).await?;
         let channel = Self::create_channel(&connection).await?;
         
-        // Set QoS for the channel
         channel.basic_qos(
             CHANNEL_PREFETCH_COUNT,
             BasicQosOptions::default()
         ).await.map_err(|e| anyhow!("Failed to set channel QoS: {}", e))?;
         
-        // Use exchange if provided, otherwise use direct queue publishing
         if let Some(exchange) = exchange_name {
             Self::setup_exchange(&channel, exchange).await?;
         }
         
-        // Always declare the queue for reliability
         Self::setup_queue(&channel, queue_name).await?;
         
-        // Bind queue to exchange if both are provided
         if let Some(exchange) = exchange_name {
             let routing = routing_key.unwrap_or(queue_name);
             Self::bind_queue_to_exchange(&channel, queue_name, exchange, routing).await?;
@@ -126,7 +122,7 @@ impl RabbitMQConnection {
     async fn setup_exchange(channel: &Channel, exchange_name: &str) -> Result<()> {
         channel.exchange_declare(
             exchange_name,
-            ExchangeKind::Topic,  // Topic exchange for more flexible routing
+            ExchangeKind::Topic, 
             ExchangeDeclareOptions {
                 durable: true,
                 ..ExchangeDeclareOptions::default()
@@ -145,7 +141,7 @@ impl RabbitMQConnection {
                 ..QueueDeclareOptions::default()
             },
             FieldTable::default()
-                .into(), // Add dead letter exchange config if needed
+                .into(), 
         ).await.map_err(|e| anyhow!("Failed to declare queue {}: {}", queue_name, e))?;
         
         Ok(())
@@ -172,32 +168,28 @@ impl RabbitMQConnection {
     }
     
     pub async fn publish<T: Serialize>(&self, message: &T) -> Result<()> {
-        // Acquire a permit from the semaphore
         let _permit = self.publish_semaphore.acquire().await
             .map_err(|e| anyhow!("Failed to acquire publish permit: {}", e))?;
             
-        // Serialize the message
         let payload = serde_json::to_vec(message)
             .map_err(|e| anyhow!("Failed to serialize message: {}", e))?;
         
         let channel = self.channel.lock().await;
         
-        // Determine target exchange and routing key
         let (exchange, routing_key) = match &self.exchange_name {
             Some(exchange) => (exchange.as_str(), self.routing_key.as_str()),
-            None => ("", self.queue_name.as_str()),  // Direct to queue
+            None => ("", self.queue_name.as_str()),  
         };
         
         debug!("Publishing message to exchange: '{}', routing key: '{}'", 
             if exchange.is_empty() { "default" } else { exchange }, 
             routing_key);
         
-        // Set message properties
+
         let properties = BasicProperties::default()
-            .with_delivery_mode(2) // persistent delivery mode
+            .with_delivery_mode(2) 
             .with_content_type("application/json".into());
         
-        // Publish with timeout
         match timeout(
             Duration::from_millis(PUBLISH_TIMEOUT_MS),
             channel.basic_publish(
@@ -209,7 +201,6 @@ impl RabbitMQConnection {
             )
         ).await {
             Ok(Ok(confirm_future)) => {
-                // Wait for publisher confirm
                 match timeout(
                     Duration::from_millis(PUBLISH_TIMEOUT_MS),
                     confirm_future
@@ -258,11 +249,9 @@ impl RabbitMQConnection {
         
         let batch_size = self.batch_size;
         
-        // Process in batches to avoid overwhelming the broker
         for chunk in messages.chunks(batch_size) {
             let mut tasks = Vec::with_capacity(chunk.len());
             
-            // Start publishing all messages in parallel with concurrency control via semaphore
             for message in chunk {
                 let this = self.clone();
                 let message_clone = serde_json::to_vec(message)
@@ -275,18 +264,15 @@ impl RabbitMQConnection {
                             
                         let channel = this.channel.lock().await;
                         
-                        // Determine target exchange and routing key
                         let (exchange, routing_key) = match &this.exchange_name {
                             Some(exchange) => (exchange.as_str(), this.routing_key.as_str()),
                             None => ("", this.queue_name.as_str()),
                         };
                         
-                        // Set message properties
                         let properties = BasicProperties::default()
-                            .with_delivery_mode(2) // persistent
+                            .with_delivery_mode(2) 
                             .with_content_type("application/json".into());
                         
-                        // Publish with timeout
                         match timeout(
                             Duration::from_millis(PUBLISH_TIMEOUT_MS),
                             channel.basic_publish(
@@ -298,7 +284,6 @@ impl RabbitMQConnection {
                             )
                         ).await {
                             Ok(Ok(confirm_future)) => {
-                                // Wait for publisher confirm
                                 match timeout(
                                     Duration::from_millis(PUBLISH_TIMEOUT_MS),
                                     confirm_future
@@ -333,11 +318,10 @@ impl RabbitMQConnection {
                 }));
             }
             
-            // Collect results
             let mut has_errors = false;
             for task in tasks {
                 match task.await {
-                    Ok(Ok(_)) => {}, // Success
+                    Ok(Ok(_)) => {}, 
                     Ok(Err(e)) => {
                         error!("Failed to publish message in batch: {}", e);
                         has_errors = true;
@@ -357,7 +341,7 @@ impl RabbitMQConnection {
         Ok(())
     }
     
-    // Implement graceful shutdown
+
     pub async fn shutdown(&self) -> Result<()> {
         let channel = self.channel.lock().await;
         if let Err(e) = channel.close(0, "Shutdown requested").await {
