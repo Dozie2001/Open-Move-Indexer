@@ -24,8 +24,7 @@ pub struct RabbitMQConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct AppConfig {
     pub sui: SuiConfig,
-    pub rabbitmq: RabbitMQConfig,
-    pub log_level: String,
+    pub rabbitmq: RabbitMQConfig
 }
 
 impl AppConfig {
@@ -66,8 +65,7 @@ impl Default for AppConfig {
                 exchange: None,
                 routing_key: None,
                 batch_size: Some(500),
-            },
-            log_level: "info".to_string(),
+            }
         }
     }
 }

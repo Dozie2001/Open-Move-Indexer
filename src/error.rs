@@ -6,9 +6,6 @@ pub enum IndexerError {
     #[error("Database error: {0}")]
     Database(#[from] sqlx::Error),
 
-    #[error("Sui processing error: {0}")]
-    SuiError(String),
-
     #[error("Config error: {0}")]
     ConfigError(#[from] config::ConfigError),
 
@@ -20,9 +17,6 @@ pub enum IndexerError {
 
     #[error("Anyhow error: {0}")]
     AnyhowError(#[from] AnyhowError),
-
-    #[error("Unknown error: {0}")]
-    Unknown(String),
 }
 
 pub type Result<T> = std::result::Result<T, IndexerError>;

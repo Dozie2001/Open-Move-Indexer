@@ -86,7 +86,7 @@ async fn main() -> Result<()> {
         }
     });
 
-    let result = executor.await?;
+    executor.await?;
     
     info!("Sui event indexer shutting down");
     

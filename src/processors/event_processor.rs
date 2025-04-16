@@ -40,7 +40,7 @@ impl EventProcessor {
         
         let checkpoint_timestamp = checkpoint.checkpoint_summary.timestamp_ms;
 
-        let checkpoint_datetime = DateTime::<Utc>::from_timestamp_millis((checkpoint_timestamp as i64))
+        let checkpoint_datetime = DateTime::<Utc>::from_timestamp_millis(checkpoint_timestamp as i64)
             .ok_or_else(|| anyhow!("Invalid timestamp: {}", checkpoint_timestamp))?;
 
         info!("Processing events for checkpoint {}", checkpoint_seq);
