@@ -1,6 +1,6 @@
-use crate::db::DbPool;
 use crate::error::Result;
-use crate::models::{Event, ProcessedCheckpoint};
+use crate::models::EventMessage;
+use crate::rabbitmq::RabbitMQConnection;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -8,78 +8,112 @@ use serde_json::Value;
 use std::sync::Arc;
 use sui_data_ingestion_core::Worker;
 use sui_types::full_checkpoint_content::CheckpointData;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn, instrument};
+use tokio::time::{timeout, Duration};
+
+const EVENT_PROCESSING_TIMEOUT_MS: u64 = 30000; // 30 seconds
 
 pub struct EventProcessor {
-    db_pool: Arc<DbPool>,
+    rabbitmq: Arc<RabbitMQConnection>,
+    // Optional in-memory cache of recently processed checkpoints
+    // to avoid duplicate processing in case of restarts or failures
+    last_processed_checkpoint: std::sync::atomic::AtomicU64,
 }
 
 impl EventProcessor {
-    pub fn new(db_pool: Arc<DbPool>) -> Self {
-        Self { db_pool }
+    pub fn new(rabbitmq: Arc<RabbitMQConnection>) -> Self {
+        Self { 
+            rabbitmq,
+            last_processed_checkpoint: std::sync::atomic::AtomicU64::new(0),
+        }
     }
 
+    #[instrument(skip(self, checkpoint), fields(checkpoint_seq = checkpoint.checkpoint_summary.sequence_number))]
     async fn process_events(&self, checkpoint: &CheckpointData) -> Result<()> {
         let checkpoint_seq = checkpoint.checkpoint_summary.sequence_number;
+        let last_processed = self.last_processed_checkpoint.load(std::sync::atomic::Ordering::Relaxed);
+
+        if checkpoint_seq <= last_processed {
+            debug!("Checkpoint {} already processed, skipping", checkpoint_seq);
+            return Ok(());
+        }
+        
         let checkpoint_timestamp = checkpoint.checkpoint_summary.timestamp_ms;
 
-        let checkpoint_timestamp = DateTime::<Utc>::from_timestamp(
-            checkpoint_timestamp as i64 / 1000,
-            0,
-        )
-        .ok_or(anyhow!("Invalid timestamp"))?;
+        let checkpoint_datetime = DateTime::<Utc>::from_timestamp_millis((checkpoint_timestamp as i64))
+            .ok_or_else(|| anyhow!("Invalid timestamp: {}", checkpoint_timestamp))?;
 
-        info!(
-            "Processing events for checkpoint {}",
-            checkpoint_seq
-        );
+        info!("Processing events for checkpoint {}", checkpoint_seq);
 
-        let mut events = Vec::new();
+        let estimated_event_count = checkpoint.transactions.len() * 2;  // rough estimate
+        let mut events = Vec::with_capacity(estimated_event_count);
+        
         let mut event_count = 0;
-
-        for transaction in checkpoint.transactions.iter() {            
-            let tx_digest = transaction.transaction.digest().base58_encode();
-            let sender = transaction.transaction.sender_address();
-            
-            for (event_idx, event) in transaction.events.iter().enumerate() {
+        
+        match timeout(
+            Duration::from_millis(EVENT_PROCESSING_TIMEOUT_MS),
+            async {
+                for transaction in checkpoint.transactions.iter() {            
+                    let tx_digest = transaction.transaction.digest().base58_encode();
+                    
+                    for event_group in transaction.events.iter() {
+                        for evt in event_group.data.iter() {
+                            event_count += 1;
+                            
+                            let event_type = evt.type_.to_canonical_string(true);
+                            let event_content = serde_json::to_value(&evt.contents)
+                                .unwrap_or_else(|_| {
+                                    warn!("Failed to serialize event contents for tx {}", tx_digest);
+                                    Value::Null
+                                });
+                                
+                            let event = EventMessage::new(
+                                tx_digest.clone(),
+                                event_type,
+                                evt.package_id.to_hex(),
+                                evt.transaction_module.to_string(),
+                                evt.sender.to_string(),
+                                checkpoint_datetime,
+                                checkpoint_seq as i64,
+                                event_content,
+                            );
                 
-                event_count += 1;
-                for evt in event.data.iter() {
-                    let event_type = evt.type_.to_canonical_string(true);
-                    let event_content  = serde_json::to_value(evt.contents.clone()).unwrap_or(Value::Null);
-                        
-                    // Create event record
-                    let event = Event::new(
-                        tx_digest.clone(),
-                        event_type,
-                        evt.package_id.to_hex(),
-                        evt.transaction_module.to_string(),
-                        evt.sender.to_string(),
-                        checkpoint_timestamp,
-                        checkpoint_seq as i64,
-                        0,
-                        event_content,
-                    );
-    
-                    events.push(event);
+                            events.push(event);
+                        }
+                    }
                 }
+                
+                Result::<()>::Ok(())
+            }
+        ).await {
+            Ok(Ok(_)) => {},
+            Ok(Err(e)) => {
+                error!("Error extracting events from checkpoint {}: {}", checkpoint_seq, e);
+                return Err(e.into());
+            },
+            Err(_) => {
+                error!("Timeout extracting events from checkpoint {}", checkpoint_seq);
+                return Err(anyhow!("Timeout extracting events from checkpoint {}", checkpoint_seq).into());
             }
         }
 
         if !events.is_empty() {
-            Event::batch_insert(&events, self.db_pool.clone()).await?;
-            info!("Inserted {} events for checkpoint {}", events.len(), checkpoint_seq);
+            match self.rabbitmq.publish_batch(&events).await {
+                Ok(_) => {
+                    info!("Published {} events to RabbitMQ for checkpoint {}", events.len(), checkpoint_seq);
+                },
+                Err(e) => {
+                    error!("Failed to publish events for checkpoint {}: {}", checkpoint_seq, e);
+                    return Err(e);
+                }
+            }
         } else {
             debug!("No events found in checkpoint {}", checkpoint_seq);
         }
 
-        let processed_checkpoint = ProcessedCheckpoint::new(checkpoint_seq as i64, checkpoint_timestamp);
-        processed_checkpoint.insert(self.db_pool.clone()).await?;
+        self.last_processed_checkpoint.store(checkpoint_seq, std::sync::atomic::Ordering::Relaxed);
 
-        info!(
-            "Completed processing checkpoint {} with {} events",
-            checkpoint_seq, event_count
-        );
+        info!("Completed processing checkpoint {} with {} events", checkpoint_seq, event_count);
 
         Ok(())
     }

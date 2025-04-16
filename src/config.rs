@@ -6,12 +6,6 @@ use std::sync::Arc;
 static CONFIG: OnceCell<Arc<AppConfig>> = OnceCell::new();
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct DatabaseConfig {
-    pub url: String,
-    pub max_connections: u32,
-}
-
-#[derive(Debug, Deserialize, Clone)]
 pub struct SuiConfig {
     pub endpoint: String,
     pub initial_checkpoint: u64,
@@ -19,9 +13,18 @@ pub struct SuiConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+pub struct RabbitMQConfig {
+    pub url: String,
+    pub queue: String,
+    pub exchange: Option<String>,
+    pub routing_key: Option<String>,
+    pub batch_size: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
 pub struct AppConfig {
-    pub database: DatabaseConfig,
     pub sui: SuiConfig,
+    pub rabbitmq: RabbitMQConfig,
     pub log_level: String,
 }
 
@@ -52,14 +55,17 @@ impl AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            database: DatabaseConfig {
-                url: "postgres://postgres:postgres@localhost:5432/indexer".to_string(),
-                max_connections: 5,
-            },
             sui: SuiConfig {
                 endpoint: "https://checkpoints.testnet.sui.io".to_string(),
                 initial_checkpoint: 0,
                 concurrency: 5,
+            },
+            rabbitmq: RabbitMQConfig {
+                url: "amqp://guest:guest@localhost:5672".to_string(),
+                queue: "sui_events".to_string(),
+                exchange: None,
+                routing_key: None,
+                batch_size: Some(500),
             },
             log_level: "info".to_string(),
         }

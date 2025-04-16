@@ -1,5 +1,3 @@
-mod event;
-mod processed_checkpoint;
+pub mod event;
 
-pub use event::Event;
-pub use processed_checkpoint::ProcessedCheckpoint;
+pub use event::EventMessage;

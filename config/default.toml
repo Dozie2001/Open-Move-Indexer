@@ -1,10 +1,14 @@
-[database]
-url = "postgres://postgres:postgres@localhost:5432/indexer"
-max_connections = 10
-
 [sui]
 endpoint = "https://checkpoints.testnet.sui.io"
 initial_checkpoint = 0
 concurrency = 5
+
+[rabbitmq]
+url = "amqp://guest:guest@localhost:5672"
+queue = "sui_events"
+# Optional: enable these for more advanced routing
+# exchange = "sui_events_exchange"  
+# routing_key = "sui.events"
+batch_size = 500
 
 log_level = "info"
